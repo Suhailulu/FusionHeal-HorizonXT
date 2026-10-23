@@ -1,0 +1,29 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Testing & distribution
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Pipeline outputs (preserve .gitkeep)
+outputs/*
+!outputs/.gitkeep
+FusionHeal_Antigravity_Starter/outputs/*
+!FusionHeal_Antigravity_Starter/outputs/.gitkeep
+
+# OS & IDE metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,48 @@
+timestamp_column: timestamp
+timezone_policy: preserve_if_naive
+# Demo-only limits. Replace with approved process limits before real use.
+sensor_limits:
+  temperature:
+    min: 0
+    max: 150
+  pressure:
+    min: 0
+    max: 20
+  vibration:
+    min: 0
+    max: 50
+
+detection:
+  rolling_window: 9
+  mad_threshold: 5.0
+  min_history_points: 5
+  window_strategy: "centered" # "centered" for batch demo, "past_only" for streaming
+  spike:
+    enabled: true
+    spike_threshold: 4.0
+    recovery_tolerance: 2.0
+  stuck:
+    enabled: true
+    min_stuck_samples: 5
+    tolerance: 0.0001
+  drift:
+    enabled: true
+    drift_threshold: 4.0
+    slack: 0.5
+    min_drift_samples: 3
+  timestamp:
+    enabled: true
+    expected_interval_seconds: 60.0
+    gap_tolerance_multiplier: 1.5
+    check_duplicates: true
+    check_order: true
+  cross_sensor:
+    enabled: true
+    # Validated physical relationships only. If empty, detector is marked unavailable.
+    rules: []
+
+decision:
+  # Candidate values are auto-accepted only when a basic range check passes
+  # and the reconstruction method is marked as sufficiently supported.
+  auto_accept_interpolation: true
+  auto_accept_outlier_replacement: false
