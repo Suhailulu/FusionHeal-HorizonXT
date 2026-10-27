@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 # Load from .env if present
@@ -11,6 +11,20 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+
+def _parse_bool(val: Any, default: bool = False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+
+def _parse_list(val: Optional[str]) -> List[str]:
+    if not val:
+        return []
+    return [item.strip() for item in val.split(",") if item.strip()]
 
 
 class SensorConstraint(BaseModel):
@@ -26,6 +40,7 @@ class SensorConstraint(BaseModel):
 class Settings(BaseModel):
     app_name: str = "FusionHeal"
     environment: str = "development"
+    log_level: str = "INFO"
     database_url: str = "sqlite:///./fusionheal.db"
     host: str = "127.0.0.1"
     port: int = 8000
@@ -46,8 +61,16 @@ class Settings(BaseModel):
     auto_accept_repairs: bool = True
     min_auto_accept_confidence: float = 0.80  # candidates with confidence >= 0.80 can be auto-accepted
     min_review_confidence: float = 0.40       # candidates with 0.40 <= confidence < 0.80 routed to REVIEW
-    manual_review_sensors: list[str] = Field(default_factory=list)  # specific sensors requiring mandatory human review
+    manual_review_sensors: List[str] = Field(default_factory=list)  # specific sensors requiring mandatory human review
 
+    # External ML Model Configuration (Weights stored outside Git)
+    transformer_model_path: str = "models/saits_spatial_temporal.onnx"
+    transformer_device: str = "cpu"
+
+    # Cloud & Supabase Integration (Optional credentials, never committed)
+    supabase_url: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    supabase_service_role_key: Optional[str] = None
 
     # Configured Asset/Sensor constraints (Boiler & Pump as required)
     sensor_constraints: Dict[str, SensorConstraint] = Field(default_factory=lambda: {
@@ -85,6 +108,10 @@ class Settings(BaseModel):
             "frozen_count": self.frozen_consecutive_count,
             "spike_mad": self.spike_mad_threshold,
             "drift_cusum": self.drift_cusum_threshold,
+            "auto_accept_repairs": self.auto_accept_repairs,
+            "min_auto_accept_confidence": self.min_auto_accept_confidence,
+            "min_review_confidence": self.min_review_confidence,
+            "manual_review_sensors": self.manual_review_sensors,
             "constraints": {k: v.model_dump() for k, v in self.sensor_constraints.items()},
         }
         serialized = json.dumps(data, sort_keys=True)
@@ -95,14 +122,27 @@ def get_settings() -> Settings:
     return Settings(
         app_name=os.getenv("APP_NAME", "FusionHeal"),
         environment=os.getenv("ENVIRONMENT", "development"),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
         database_url=os.getenv("DATABASE_URL", "sqlite:///./fusionheal.db"),
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
         default_sampling_interval_seconds=float(os.getenv("DEFAULT_SAMPLING_INTERVAL_SECONDS", "1.0")),
         communication_gap_multiplier=float(os.getenv("COMMUNICATION_GAP_MULTIPLIER", "2.5")),
+        allowed_clock_skew_seconds=float(os.getenv("ALLOWED_CLOCK_SKEW_SECONDS", "10.0")),
+        enforce_wall_clock_sync=_parse_bool(os.getenv("ENFORCE_WALL_CLOCK_SYNC", "false")),
         frozen_consecutive_count=int(os.getenv("FROZEN_CONSECUTIVE_COUNT", "5")),
         spike_mad_threshold=float(os.getenv("SPIKE_MAD_THRESHOLD", "5.0")),
+        drift_cusum_slack=float(os.getenv("DRIFT_CUSUM_SLACK", "0.5")),
         drift_cusum_threshold=float(os.getenv("DRIFT_CUSUM_THRESHOLD", "5.0")),
         policy_version=os.getenv("POLICY_VERSION", "1.0.0-horizonxt"),
         rule_config_version=os.getenv("RULE_CONFIG_VERSION", "2026.1"),
+        auto_accept_repairs=_parse_bool(os.getenv("AUTO_ACCEPT_REPAIRS", "true")),
+        min_auto_accept_confidence=float(os.getenv("MIN_AUTO_ACCEPT_CONFIDENCE", "0.80")),
+        min_review_confidence=float(os.getenv("MIN_REVIEW_CONFIDENCE", "0.40")),
+        manual_review_sensors=_parse_list(os.getenv("MANUAL_REVIEW_SENSORS", "")),
+        transformer_model_path=os.getenv("TRANSFORMER_MODEL_PATH", "models/saits_spatial_temporal.onnx"),
+        transformer_device=os.getenv("TRANSFORMER_DEVICE", "cpu"),
+        supabase_url=os.getenv("SUPABASE_URL"),
+        supabase_anon_key=os.getenv("SUPABASE_ANON_KEY"),
+        supabase_service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
     )

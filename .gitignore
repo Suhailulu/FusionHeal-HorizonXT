@@ -1,46 +1,92 @@
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
+# =============================================================================
+# FusionHeal — Comprehensive Git Ignore Policy
+# Protects secrets, API keys, databases, model checkpoints, and large assets.
+# =============================================================================
 
-# Python cache & compiled files
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyd
-
-# Node dependencies
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-fusionheal.db
-
-# Environment files
+# 1. Environment & Secrets (NEVER COMMIT SENSITIVE ASSETS)
 .env
 .env.local
 .env.*.local
+*.env
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*credentials*.json
+*service-account*.json
+*secret*.json
+*.token
 
-# Testing & distribution
-.pytest_cache/
-*.egg-info/
-dist/
-build/
+# 2. Database & Persistent Storage
+*.db
+*.sqlite
+*.sqlite3
+*.rdb
+fusionheal.db
 
-# Pipeline outputs (preserve .gitkeep)
+# 3. Machine Learning Weights & Large Model Assets (Store in artifact registry / S3 / GCS)
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.engine
+*.h5
+*.joblib
+*.pkl
+*.pickle
+models/*
+!models/.gitkeep
+weights/*
+!weights/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+
+# 4. Large Datasets & Bulk Telemetry Dumps
+*.parquet
+*.arrow
+*.feather
+*.h5
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# 5. Pipeline Run Outputs
 outputs/*
 !outputs/.gitkeep
 FusionHeal_Antigravity_Starter/outputs/*
 !FusionHeal_Antigravity_Starter/outputs/.gitkeep
 
-# OS & IDE metadata
+# 6. Python Virtual Environments & Caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# 7. Node & Supabase Temporary Artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+supabase/.temp/
+supabase/.branches/
+
+# 8. OS & IDE Metadata
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+*.swp
+*.swo
