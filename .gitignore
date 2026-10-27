@@ -10,6 +10,23 @@ __pycache__/
 *$py.class
 *.pyd
 
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+fusionheal.db
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
 # Testing & distribution
 .pytest_cache/
 *.egg-info/
