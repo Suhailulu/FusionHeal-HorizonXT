@@ -57,7 +57,7 @@ class SyntheticSensorGenerator:
             reading_id=f"READ-BOILER-{uuid.uuid4().hex[:8]}",
             asset_id="boiler_01",
             sensor_id="temperature_01",
-            timestamp=ts,
+            event_timestamp=ts,
             sequence_number=seq,
             value=true_clean_val,
             unit="C",
@@ -94,10 +94,11 @@ class SyntheticSensorGenerator:
             reading_id=f"READ-PUMP-{uuid.uuid4().hex[:8]}",
             asset_id="pump_01",
             sensor_id="vibration_01",
-            timestamp=ts,
+            event_timestamp=ts,
             sequence_number=seq,
             value=true_clean_val,
             unit="m/s2",
             source_type="simulated",
         )
         return reading, true_clean_val
+

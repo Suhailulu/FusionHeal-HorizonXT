@@ -35,6 +35,7 @@ class SensorConstraint(BaseModel):
     max_value: float
     max_rate_of_change: float  # max absolute delta per second
     nominal_interval_seconds: float = 1.0
+    allowed_lateness_seconds: float = 5.0
 
 
 class Settings(BaseModel):
@@ -48,12 +49,14 @@ class Settings(BaseModel):
     # Timing & detection tolerances
     default_sampling_interval_seconds: float = 1.0
     communication_gap_multiplier: float = 2.5
+    allowed_lateness_seconds: float = 5.0
     frozen_consecutive_count: int = 5
     spike_mad_threshold: float = 5.0
     drift_cusum_slack: float = 0.5
     drift_cusum_threshold: float = 5.0
     allowed_clock_skew_seconds: float = 10.0
     enforce_wall_clock_sync: bool = False
+
 
     # Policy and Governance
     policy_version: str = "1.0.0-horizonxt"

@@ -28,21 +28,27 @@ class AuditService:
         prev_hash = self.repository.get_latest_audit_hash()
         config_hash = self.settings.compute_config_hash()
 
-        # Deterministic serialization for hashing
+        event_ts = reading.event_timestamp or reading.timestamp
+        if event_ts.tzinfo is None:
+            event_ts = event_ts.replace(tzinfo=timezone.utc)
+        else:
+            event_ts = event_ts.astimezone(timezone.utc)
+
+        # Deterministic serialization for cryptographic chain
         payload_to_hash = {
             "audit_id": audit_id,
             "reading_id": reading.reading_id,
             "event_id": event_id,
             "asset_id": reading.asset_id,
             "sensor_id": reading.sensor_id,
-            "timestamp": reading.timestamp.isoformat(),
+            "event_timestamp": event_ts.isoformat(),
             "original_value": decision.original_value,
             "candidate_value": decision.candidate_value,
             "accepted_value": decision.accepted_value,
             "decision_status": decision.status,
             "validation_result": decision.validation_result,
             "decision_reason": decision.decision_reason,
-            "model_version": decision.model_version,
+            "model_version": decision.model_version or "unavailable",
             "rule_config_version": decision.rule_config_version,
             "config_hash": config_hash,
             "prev_record_hash": prev_hash or "GENESIS_ROOT",
@@ -56,19 +62,24 @@ class AuditService:
             event_id=event_id,
             asset_id=reading.asset_id,
             sensor_id=reading.sensor_id,
-            timestamp=reading.timestamp,
+            action="DECISION",
+            timestamp=event_ts,
+            event_timestamp=event_ts,
             original_value=decision.original_value,
             candidate_value=decision.candidate_value,
             accepted_value=decision.accepted_value,
+            quality_status="VALID" if decision.status == "PRESERVE" else "SUSPECT",
             decision_status=decision.status,
             validation_result=decision.validation_result,
+            reason=decision.decision_reason,
             decision_reason=decision.decision_reason,
-            model_version=decision.model_version,
+            model_version=decision.model_version or "unavailable",
             rule_config_version=decision.rule_config_version,
             config_hash=config_hash,
             record_hash=record_hash,
             prev_record_hash=prev_hash,
             created_at=now,
+            processed_at=now,
         )
 
         return self.repository.save_audit_log(audit_entry)

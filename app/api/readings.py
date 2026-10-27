@@ -15,11 +15,15 @@ class ReadingResponse(BaseModel):
     reading_id: str
     asset_id: str
     sensor_id: str
+    event_timestamp: datetime
     timestamp: datetime
+    received_at: Optional[datetime] = None
     ingested_at: datetime
+    processed_at: Optional[datetime] = None
     sequence_number: int
     value: Optional[float]
     is_missing: bool
+    quality_status: str = "VALID"
     unit: str
     source_type: str
     validation_status: str

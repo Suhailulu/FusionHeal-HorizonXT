@@ -45,12 +45,15 @@ def ingest_telemetry(
         else:
             raise ValueError("Payload must be a JSON object or array of telemetry readings.")
     except ValidationError as val_err:
+        import json
+        safe_errors = json.loads(json.dumps(val_err.errors(), default=str))
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=val_err.errors(),
+            detail=safe_errors,
         )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Telemetry ingestion failed: {str(exc)}",
         )
+

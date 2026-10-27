@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.config import Settings
 from app.ingestion.schemas import TelemetryReadingInput
 from app.pipeline.detection import QualityDetectionEvent
@@ -10,47 +10,85 @@ DecisionStatus = Literal["PRESERVE", "REPAIR", "REVIEW", "UNRESOLVED"]
 
 
 class DecisionRecord(BaseModel):
-    status: DecisionStatus = Field(
-        ..., description="Primary status: PRESERVE, REPAIR, REVIEW, or UNRESOLVED"
+    status: str = Field(
+        ..., description="Official decision status: PRESERVE, REPAIR, REVIEW, or UNRESOLVED"
+    )
+    decision_status: DecisionStatus = Field(
+        "PRESERVE", description="Official 4-status industrial decision: PRESERVE, REPAIR, REVIEW, or UNRESOLVED"
+    )
+    human_review_required: bool = Field(
+        False, description="True if this observation requires human engineering assessment"
     )
     original_value: Optional[float] = Field(None, description="Original observed sensor reading")
     candidate_value: Optional[float] = Field(None, description="Candidate estimate proposed by model or method")
     accepted_value: Optional[float] = Field(None, description="Final accepted output value; null if review or unresolved")
+    final_value: Optional[float] = Field(None, description="Published output value: original for PRESERVE/REVIEW/UNRESOLVED, candidate for REPAIR")
     repair_method: Optional[str] = Field(None, description="Method applied for accepted repair")
     decision_reason: str = Field(..., description="Transparent technical rationale for decision")
+    reason: Optional[str] = Field(None, description="Alias for decision_reason")
     validation_result: str = Field(..., description="Validation outcome (PASS, FAIL, CONSTRAINT_VIOLATION, PENDING_REVIEW)")
     review_rule_triggered: Optional[str] = Field(None, description="Specific review rule triggered if status is REVIEW")
     policy_version: str = Field(..., description="Version of decision policy applied")
     rule_config_version: str = Field(..., description="Version of rule configuration applied")
     confidence_score: Optional[float] = Field(None, description="Model confidence score if available; null otherwise")
+    confidence: Optional[float] = Field(None, description="Alias for confidence_score")
     model_version: Optional[str] = Field(None, description="Version of reconstruction model if invoked")
+    inference_latency_ms: Optional[float] = Field(None, description="Inference latency in milliseconds if model was executed")
+
+    @model_validator(mode="after")
+    def sync_decision_fields(self) -> DecisionRecord:
+        if not self.reason:
+            self.reason = self.decision_reason
+        if self.confidence is None and self.confidence_score is not None:
+            self.confidence = self.confidence_score
+
+        # Synchronize status and decision_status across all 4 official statuses
+        if self.status in ("PRESERVE", "REPAIR", "REVIEW", "UNRESOLVED"):
+            self.decision_status = self.status
+        else:
+            self.status = self.decision_status
+
+        # Set human_review_required flag
+        self.human_review_required = (self.decision_status == "REVIEW")
+
+        # Guarantee: final_value matches accepted_value for REPAIR, original_value for PRESERVE/REVIEW/UNRESOLVED
+        if self.decision_status == "REPAIR":
+            if self.final_value is None and self.accepted_value is not None:
+                self.final_value = self.accepted_value
+            elif self.accepted_value is None and self.final_value is not None:
+                self.accepted_value = self.final_value
+        elif self.decision_status in ("REVIEW", "UNRESOLVED"):
+            # Original data kept intact! Candidate is NEVER placed into final_value or accepted_value
+            self.accepted_value = None
+            self.final_value = self.original_value
+        elif self.decision_status == "PRESERVE":
+            self.final_value = self.original_value
+            self.accepted_value = self.original_value
+
+        return self
 
 
 class DecisionEngine:
-    """Enforces evidence-governed, process-constrained acceptance and review policies.
+    """Centralized industrial decision engine enforcing evidence-governed, process-constrained policies.
 
-    GRADED DECISION TAXONOMY:
+    THE FOUR OFFICIAL DECISION STATUSES:
     1. PRESERVE:
-       Observation conforms to all physical plausibility, rate-of-change, and sequence rules.
-       Original telemetry is preserved intact.
+       No actionable data-quality problem is detected and no modification is justified.
+       Original observation is retained unchanged.
 
     2. REPAIR:
-       A data-quality issue was detected, an ML candidate is available, and the candidate
-       strictly passes independent physical bounds, rate-of-change checks, high-confidence
-       thresholds, and auto-acceptance policy.
+       A data-quality issue was identified, a correction candidate exists, passes independent
+       physical bounds & rate-of-change constraints, satisfies confidence policy, and auto-repair is permitted.
+       Stores original and accepted values separately.
 
     3. REVIEW:
-       A candidate or anomaly exists, but cannot be automatically accepted without human engineer
-       judgment under one of the 4 explicit Review Rules:
-       - Rule R1 (Policy Gate): Auto-acceptance is disabled by plant policy or sensor is designated for manual sign-off.
-       - Rule R2 (Confidence Gate): Candidate satisfies physical bounds, but model confidence is borderline (0.40 <= conf < 0.80).
-       - Rule R3 (Staleness Ambiguity Gate): Sensor shows repeated identical values (FROZEN_SENSOR); requires operator review to distinguish steady-state operation from ADC freeze.
-       - Rule R4 (Soft Constraint Warning): Candidate satisfies absolute bounds but approaches dynamic rate-of-change envelope.
+       A decision requires additional evidence, human assessment, or further investigation.
+       Original telemetry is kept intact, candidate (if any) is preserved separately,
+       and the event is marked pending review.
 
     4. UNRESOLVED:
-       The system cannot safely reconstruct the value, the ML model is unavailable,
-       the candidate violates mandatory physical constraints, or confidence is below minimum
-       plausible threshold (< 0.40). The system refuses to invent synthetic data.
+       The current processing attempt cannot establish a reliable correction and no available
+       investigation path is expected to resolve the issue. Original data is kept intact.
     """
 
     def __init__(self, settings: Settings):
@@ -67,16 +105,20 @@ class DecisionEngine:
         rule_ver = self.settings.rule_config_version
         sensor_key = f"{reading.asset_id}:{reading.sensor_id}"
         constraint = self.settings.get_constraint(reading.asset_id, reading.sensor_id)
+        latency_ms = prediction.inference_latency_ms if prediction else None
 
         # ---------------------------------------------------------------------
-        # Status 1: PRESERVE
+        # Status 1: PRESERVE (Clean telemetry)
         # ---------------------------------------------------------------------
         if not issues:
             return DecisionRecord(
                 status="PRESERVE",
+                decision_status="PRESERVE",
+                human_review_required=False,
                 original_value=reading.value,
                 candidate_value=None,
                 accepted_value=reading.value,
+                final_value=reading.value,
                 repair_method=None,
                 decision_reason=(
                     "Observation conforms to physical plausibility bounds, continuous sequence, "
@@ -88,6 +130,7 @@ class DecisionEngine:
                 rule_config_version=rule_ver,
                 confidence_score=None,
                 model_version=None,
+                inference_latency_ms=latency_ms,
             )
 
         issue_types = {i.issue_type for i in issues}
@@ -95,16 +138,19 @@ class DecisionEngine:
         issues_summary = "; ".join(issue_descriptions)
 
         # ---------------------------------------------------------------------
-        # Status 4 (Branch A): UNRESOLVED when Model is Disconnected or No Candidate
+        # Handling Anomaly Without Model Candidate
         # ---------------------------------------------------------------------
         if prediction is None or not prediction.available or prediction.candidate_value is None:
-            # Special Check: Ambiguous Frozen Sensor with no model
+            # Ambiguous Frozen Sensor with no model -> Requires operator review (Rule R3)
             if "FROZEN_SENSOR" in issue_types and len(issue_types) == 1:
                 return DecisionRecord(
                     status="REVIEW",
+                    decision_status="REVIEW",
+                    human_review_required=True,
                     original_value=reading.value,
                     candidate_value=None,
                     accepted_value=None,
+                    final_value=reading.value,
                     repair_method=None,
                     decision_reason=(
                         "Consecutive identical sensor readings detected. "
@@ -115,14 +161,18 @@ class DecisionEngine:
                     policy_version=policy_ver,
                     rule_config_version=rule_ver,
                     confidence_score=None,
-                    model_version=prediction.model_version if prediction else None,
+                    model_version=prediction.model_version if prediction else "unavailable",
+                    inference_latency_ms=latency_ms,
                 )
 
             return DecisionRecord(
                 status="UNRESOLVED",
+                decision_status="UNRESOLVED",
+                human_review_required=False,
                 original_value=reading.value,
                 candidate_value=None,
                 accepted_value=None,
+                final_value=reading.value,
                 repair_method=None,
                 decision_reason=(
                     f"Data-quality fault(s) detected [{issues_summary}]. "
@@ -134,7 +184,8 @@ class DecisionEngine:
                 policy_version=policy_ver,
                 rule_config_version=rule_ver,
                 confidence_score=None,
-                model_version=prediction.model_version if prediction else None,
+                model_version=prediction.model_version if prediction else "unavailable",
+                inference_latency_ms=latency_ms,
             )
 
         # ---------------------------------------------------------------------
@@ -148,9 +199,12 @@ class DecisionEngine:
             if candidate < constraint.min_value or candidate > constraint.max_value:
                 return DecisionRecord(
                     status="UNRESOLVED",
+                    decision_status="UNRESOLVED",
+                    human_review_required=False,
                     original_value=reading.value,
                     candidate_value=candidate,
                     accepted_value=None,
+                    final_value=reading.value,
                     repair_method=prediction.reconstruction_method or prediction.model_name,
                     decision_reason=(
                         f"Candidate value {candidate:.2f} failed physical bounds "
@@ -163,10 +217,11 @@ class DecisionEngine:
                     rule_config_version=rule_ver,
                     confidence_score=confidence,
                     model_version=prediction.model_version,
+                    inference_latency_ms=latency_ms,
                 )
 
         # ---------------------------------------------------------------------
-        # Status 3: REVIEW Rules
+        # Status 3: REVIEW Rules (Pending human assessment)
         # ---------------------------------------------------------------------
 
         # Review Rule R1: Manual Plant Policy Gate
@@ -174,9 +229,12 @@ class DecisionEngine:
         if not self.settings.auto_accept_repairs or is_sensor_manual:
             return DecisionRecord(
                 status="REVIEW",
+                decision_status="REVIEW",
+                human_review_required=True,
                 original_value=reading.value,
                 candidate_value=candidate,
                 accepted_value=None,
+                final_value=reading.value,
                 repair_method=prediction.reconstruction_method or prediction.model_name,
                 decision_reason=(
                     f"Candidate value {candidate:.2f} verified against physical constraints. "
@@ -188,6 +246,7 @@ class DecisionEngine:
                 rule_config_version=rule_ver,
                 confidence_score=confidence,
                 model_version=prediction.model_version,
+                inference_latency_ms=latency_ms,
             )
 
         # Review Rule R2: Confidence Score Threshold Gate
@@ -199,9 +258,12 @@ class DecisionEngine:
                 # Too weak even for human review -> UNRESOLVED
                 return DecisionRecord(
                     status="UNRESOLVED",
+                    decision_status="UNRESOLVED",
+                    human_review_required=False,
                     original_value=reading.value,
                     candidate_value=candidate,
                     accepted_value=None,
+                    final_value=reading.value,
                     repair_method=prediction.reconstruction_method or prediction.model_name,
                     decision_reason=(
                         f"Candidate confidence score ({confidence:.2f}) is below minimum acceptable evidence threshold ({min_review:.2f}). "
@@ -213,14 +275,18 @@ class DecisionEngine:
                     rule_config_version=rule_ver,
                     confidence_score=confidence,
                     model_version=prediction.model_version,
+                    inference_latency_ms=latency_ms,
                 )
             elif confidence < min_accept:
                 # Borderline confidence (0.40 <= conf < 0.80) -> REVIEW
                 return DecisionRecord(
                     status="REVIEW",
+                    decision_status="REVIEW",
+                    human_review_required=True,
                     original_value=reading.value,
                     candidate_value=candidate,
                     accepted_value=None,
+                    final_value=reading.value,
                     repair_method=prediction.reconstruction_method or prediction.model_name,
                     decision_reason=(
                         f"Candidate value {candidate:.2f} satisfies physical bounds, but model confidence ({confidence:.2f}) "
@@ -232,15 +298,19 @@ class DecisionEngine:
                     rule_config_version=rule_ver,
                     confidence_score=confidence,
                     model_version=prediction.model_version,
+                    inference_latency_ms=latency_ms,
                 )
 
         # Review Rule R3: Staleness / Frozen Sensor Ambiguity
         if "FROZEN_SENSOR" in issue_types:
             return DecisionRecord(
                 status="REVIEW",
+                decision_status="REVIEW",
+                human_review_required=True,
                 original_value=reading.value,
                 candidate_value=candidate,
                 accepted_value=None,
+                final_value=reading.value,
                 repair_method=prediction.reconstruction_method or prediction.model_name,
                 decision_reason=(
                     f"Candidate {candidate:.2f} generated for frozen sensor event. "
@@ -252,6 +322,7 @@ class DecisionEngine:
                 rule_config_version=rule_ver,
                 confidence_score=confidence,
                 model_version=prediction.model_version,
+                inference_latency_ms=latency_ms,
             )
 
         # Review Rule R4: Soft Dynamic Constraint Warning (Elevated Rate-of-Change)
@@ -260,9 +331,12 @@ class DecisionEngine:
             if delta > 0.70 * constraint.max_rate_of_change:
                 return DecisionRecord(
                     status="REVIEW",
+                    decision_status="REVIEW",
+                    human_review_required=True,
                     original_value=reading.value,
                     candidate_value=candidate,
                     accepted_value=None,
+                    final_value=reading.value,
                     repair_method=prediction.reconstruction_method or prediction.model_name,
                     decision_reason=(
                         f"Candidate {candidate:.2f} satisfies absolute limits but exhibits high rate-of-change "
@@ -275,6 +349,7 @@ class DecisionEngine:
                     rule_config_version=rule_ver,
                     confidence_score=confidence,
                     model_version=prediction.model_version,
+                    inference_latency_ms=latency_ms,
                 )
 
         # ---------------------------------------------------------------------
@@ -282,9 +357,12 @@ class DecisionEngine:
         # ---------------------------------------------------------------------
         return DecisionRecord(
             status="REPAIR",
+            decision_status="REPAIR",
+            human_review_required=False,
             original_value=reading.value,
             candidate_value=candidate,
             accepted_value=candidate,
+            final_value=candidate,
             repair_method=prediction.reconstruction_method or prediction.model_name,
             decision_reason=(
                 f"Fault(s) [{issues_summary}] mitigated. "
@@ -296,4 +374,5 @@ class DecisionEngine:
             rule_config_version=rule_ver,
             confidence_score=confidence,
             model_version=prediction.model_version,
+            inference_latency_ms=latency_ms,
         )

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from app.storage.models import RawReading, QualityEvent, AcceptedReading, AuditLog, EvaluationMetricRun
 
 
@@ -34,10 +34,14 @@ class TelemetryRepository:
         if sensor_id:
             query = query.filter(RawReading.sensor_id == sensor_id)
         if start_time:
-            query = query.filter(RawReading.timestamp >= start_time)
+            query = query.filter(
+                or_(RawReading.event_timestamp >= start_time, RawReading.timestamp >= start_time)
+            )
         if end_time:
-            query = query.filter(RawReading.timestamp <= end_time)
-        return query.order_by(RawReading.timestamp.asc()).offset(offset).limit(limit).all()
+            query = query.filter(
+                or_(RawReading.event_timestamp <= end_time, RawReading.timestamp <= end_time)
+            )
+        return query.order_by(RawReading.event_timestamp.asc()).offset(offset).limit(limit).all()
 
     def save_quality_event(self, event: QualityEvent) -> QualityEvent:
         self.db.add(event)
@@ -51,6 +55,8 @@ class TelemetryRepository:
         asset_id: Optional[str] = None,
         sensor_id: Optional[str] = None,
         decision_status: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[QualityEvent]:
@@ -63,7 +69,15 @@ class TelemetryRepository:
             query = query.filter(QualityEvent.sensor_id == sensor_id)
         if decision_status:
             query = query.filter(QualityEvent.decision_status == decision_status)
-        return query.order_by(QualityEvent.timestamp.desc()).offset(offset).limit(limit).all()
+        if start_time:
+            query = query.filter(
+                or_(QualityEvent.event_timestamp >= start_time, QualityEvent.timestamp >= start_time)
+            )
+        if end_time:
+            query = query.filter(
+                or_(QualityEvent.event_timestamp <= end_time, QualityEvent.timestamp <= end_time)
+            )
+        return query.order_by(QualityEvent.event_timestamp.desc()).offset(offset).limit(limit).all()
 
     def get_event_by_id(self, event_id: str) -> Optional[QualityEvent]:
         return self.db.query(QualityEvent).filter(QualityEvent.event_id == event_id).first()
@@ -86,7 +100,7 @@ class TelemetryRepository:
             query = query.filter(AcceptedReading.asset_id == asset_id)
         if sensor_id:
             query = query.filter(AcceptedReading.sensor_id == sensor_id)
-        return query.order_by(AcceptedReading.timestamp.asc()).offset(offset).limit(limit).all()
+        return query.order_by(AcceptedReading.event_timestamp.asc()).offset(offset).limit(limit).all()
 
     def get_latest_audit_hash(self) -> Optional[str]:
         latest = self.db.query(AuditLog.record_hash).order_by(AuditLog.id.desc()).first()
@@ -102,18 +116,53 @@ class TelemetryRepository:
         self,
         asset_id: Optional[str] = None,
         sensor_id: Optional[str] = None,
+        event_id: Optional[str] = None,
         decision_status: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[AuditLog]:
         query = self.db.query(AuditLog)
+        if event_id:
+            query = query.filter(AuditLog.event_id == event_id)
         if asset_id:
             query = query.filter(AuditLog.asset_id == asset_id)
         if sensor_id:
             query = query.filter(AuditLog.sensor_id == sensor_id)
         if decision_status:
             query = query.filter(AuditLog.decision_status == decision_status)
+        if start_time:
+            query = query.filter(
+                or_(AuditLog.event_timestamp >= start_time, AuditLog.timestamp >= start_time)
+            )
+        if end_time:
+            query = query.filter(
+                or_(AuditLog.event_timestamp <= end_time, AuditLog.timestamp <= end_time)
+            )
         return query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
+
+    def get_audit_logs_for_event(self, event_id: str) -> List[AuditLog]:
+        return self.db.query(AuditLog).filter(AuditLog.event_id == event_id).all()
+
+    def get_pending_reviews(
+        self,
+        asset_id: Optional[str] = None,
+        sensor_id: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[QualityEvent]:
+        query = self.db.query(QualityEvent).filter(
+            or_(
+                QualityEvent.decision_status == "REVIEW",
+                QualityEvent.human_review_required == True,
+            )
+        )
+        if asset_id:
+            query = query.filter(QualityEvent.asset_id == asset_id)
+        if sensor_id:
+            query = query.filter(QualityEvent.sensor_id == sensor_id)
+        return query.order_by(QualityEvent.event_timestamp.desc()).offset(offset).limit(limit).all()
 
     def get_overview_counts(self) -> Dict[str, Any]:
         """Compute exact aggregate counts across telemetry and decision records.
@@ -125,22 +174,28 @@ class TelemetryRepository:
         # AcceptedReading carries exactly one primary decision per reading
         preserved = (
             self.db.query(func.count(AcceptedReading.id))
-            .filter(AcceptedReading.status == "PRESERVE")
+            .filter(or_(AcceptedReading.decision_status == "PRESERVE", AcceptedReading.status == "PRESERVE"))
             .scalar() or 0
         )
         repaired = (
             self.db.query(func.count(AcceptedReading.id))
-            .filter(AcceptedReading.status == "REPAIR")
+            .filter(or_(AcceptedReading.decision_status == "REPAIR", AcceptedReading.status == "REPAIR"))
             .scalar() or 0
         )
-        under_review = (
+        under_review_accepted = (
             self.db.query(func.count(AcceptedReading.id))
-            .filter(AcceptedReading.status == "REVIEW")
+            .filter(or_(AcceptedReading.decision_status == "REVIEW", AcceptedReading.status == "REVIEW"))
             .scalar() or 0
         )
+        under_review_events = (
+            self.db.query(func.count(QualityEvent.id))
+            .filter(or_(QualityEvent.decision_status == "REVIEW", QualityEvent.human_review_required == True))
+            .scalar() or 0
+        )
+        under_review = max(under_review_accepted, under_review_events)
         unresolved = (
             self.db.query(func.count(AcceptedReading.id))
-            .filter(AcceptedReading.status == "UNRESOLVED")
+            .filter(or_(AcceptedReading.decision_status == "UNRESOLVED", AcceptedReading.status == "UNRESOLVED"))
             .scalar() or 0
         )
 
