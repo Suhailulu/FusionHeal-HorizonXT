@@ -56,6 +56,7 @@ Simulated Sensor Data (Boiler / Pump)
    Decision Engine
    ├── PRESERVE   (Observation valid; retained intact)
    ├── REPAIR     (Candidate verified against physical rules & policy)
+   ├── REVIEW     (Flagged for operator review: borderline conf, staleness, soft warnings)
    └── UNRESOLVED (Model unavailable or candidate breaches constraints)
          │                     │
          ▼                     ▼
@@ -105,13 +106,32 @@ Every telemetric observation adheres to the following contract:
 
 ---
 
-## 5. Decision Engine Status Taxonomy
+## 5. Decision Engine Status Taxonomy & Review Rules
 
-| Status | Definition & Behavior | Accepted Value |
-| :--- | :--- | :--- |
-| **`PRESERVE`** | Reading passes all physical plausibility, rate-of-change, and sequence rules. Telemetry is retained unmodified. | Original observed value |
-| **`REPAIR`** | Fault detected; ML candidate is available; candidate passes independent physical constraints and auto-accept policy. | Candidate reconstructed value |
-| **`UNRESOLVED`** | Fault detected, but ML model is unavailable, evidence is weak, or candidate violates mandatory physical constraints. Telemetry is never fabricated. | `null` (not replaced) |
+The decision engine assigns exactly one primary decision status to each observation:
+
+| Status | Definition & Operational Behavior | Candidate Stored? | Accepted Value |
+| :--- | :--- | :---: | :--- |
+| **`PRESERVE`** | Reading passes all physical plausibility, rate-of-change, and sequence rules. Telemetry is retained unmodified. | No | Original observed value |
+| **`REPAIR`** | Fault detected; ML candidate is available; candidate passes independent physical constraints, high confidence threshold ($\ge 0.80$), and auto-accept policy. | Yes | Candidate reconstructed value |
+| **`REVIEW`** | Fault detected or candidate exists, but automatic acceptance is withheld under explicit review rules. Requires operator sign-off. | Yes | `null` (withheld until human review) |
+| **`UNRESOLVED`** | Fault detected, but ML model is unavailable, evidence is weak ($< 0.40$), or candidate breaches hard physical safety constraints. | No / Rejected | `null` (never fabricated) |
+
+### Explicit Rules for Flagging `REVIEW`
+
+1. **Rule R1: Manual Plant Policy Gate**
+   * *Trigger*: Plant policy has `auto_accept_repairs = False` or sensor is designated for manual sign-off.
+   * *Rationale*: Even when a mathematical candidate satisfies physical limits, plant regulations may require human engineering authorization before mutating the control/analytics stream.
+2. **Rule R2: Borderline ML Confidence Gate**
+   * *Trigger*: Candidate satisfies physical bounds, but model confidence score is borderline ($0.40 \le \text{confidence} < 0.80$).
+   * *Rationale*: Prevents automated acceptance of tentative or noisy ML estimates while presenting the candidate to the engineer for contextual evaluation.
+3. **Rule R3: Staleness / Frozen Sensor Ambiguity Gate**
+   * *Trigger*: Anomaly detected is `FROZEN_SENSOR` ($\ge 5$ consecutive identical floats).
+   * *Rationale*: A frozen sensor reading could represent an actual steady-state thermodynamic equilibrium or an electrical line freeze. Routing to `REVIEW` prevents falsely "repairing" legitimate steady-state processes.
+4. **Rule R4: Soft Physical Constraint Warning (Rate-of-Change)**
+   * *Trigger*: Candidate satisfies absolute range limits $[0, 150]^\circ\text{C}$ but approaches dynamic rate-of-change envelope ($> 70\%$ of maximum allowable $\Delta x/\Delta t$).
+   * *Rationale*: Flags aggressive jumps that may destabilize downstream predictive maintenance models.
+
 
 ---
 

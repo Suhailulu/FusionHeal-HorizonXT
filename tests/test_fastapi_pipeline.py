@@ -343,6 +343,44 @@ def test_connected_model_rejected_by_constraints():
     assert "cannot be overridden" in result.decision_reason
 
 
+def test_connected_model_review_on_borderline_confidence():
+    """Verify that when a model proposes a candidate with borderline confidence (e.g. 0.65), it routes to REVIEW."""
+    settings = get_settings()
+
+    class BorderlineTransformerModel(ReconstructionModel):
+        def predict(self, asset_id: str, sensor_id: str, sensor_window):
+            return ModelPrediction(
+                available=True,
+                candidate_value=73.5,
+                confidence_score=0.65,  # 0.40 <= conf < 0.80 -> REVIEW
+                model_name="MockTransformer",
+                model_version="1.0.0",
+                notes="Borderline confidence prediction",
+            )
+
+    processor = PipelineProcessor(settings, model=BorderlineTransformerModel())
+    db = TestingSessionLocal()
+    result = processor.process_reading(
+        TelemetryReadingInput(
+            reading_id="review-test-01",
+            asset_id="boiler_01",
+            sensor_id="temperature_01",
+            timestamp=datetime(2026, 10, 27, 8, 0, 1, tzinfo=timezone.utc),
+            sequence_number=1,
+            value=None,
+            unit="C",
+            source_type="simulated",
+        ),
+        db,
+    )
+    db.close()
+
+    assert result.status == "REVIEW"
+    assert result.original_value is None
+    assert result.final_value is None
+    assert "below automatic acceptance threshold" in result.decision_reason
+
+
 # -----------------------------------------------------------------------------
 # Test 10: Cryptographic Audit Hash Chaining & Verification
 # -----------------------------------------------------------------------------
@@ -409,6 +447,7 @@ def test_overview_endpoint():
     assert data["readings_preserved"] == 1
     assert data["unresolved_events"] == 1
     assert data["repairs_accepted"] == 0
+    assert data["readings_under_review"] == 0
     assert data["issues_detected"] >= 1
 
 

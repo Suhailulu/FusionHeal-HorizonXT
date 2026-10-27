@@ -133,6 +133,11 @@ class TelemetryRepository:
             .filter(AcceptedReading.status == "REPAIR")
             .scalar() or 0
         )
+        under_review = (
+            self.db.query(func.count(AcceptedReading.id))
+            .filter(AcceptedReading.status == "REVIEW")
+            .scalar() or 0
+        )
         unresolved = (
             self.db.query(func.count(AcceptedReading.id))
             .filter(AcceptedReading.status == "UNRESOLVED")
@@ -151,6 +156,7 @@ class TelemetryRepository:
             "total_readings_received": total_readings,
             "readings_preserved": preserved,
             "repairs_accepted": repaired,
+            "readings_under_review": under_review,
             "unresolved_events": unresolved,
             "issues_detected": total_issues,
             "fault_distribution": fault_distribution,

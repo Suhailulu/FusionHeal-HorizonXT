@@ -150,6 +150,7 @@ class PipelineProcessor:
             reading=reading,
             issues=issues,
             prediction=prediction,
+            previous_value=channel_state.last_valid_value,
         )
 
         # Update event decision statuses if events occurred

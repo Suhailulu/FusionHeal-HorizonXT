@@ -44,6 +44,10 @@ class Settings(BaseModel):
     policy_version: str = "1.0.0-horizonxt"
     rule_config_version: str = "2026.1"
     auto_accept_repairs: bool = True
+    min_auto_accept_confidence: float = 0.80  # candidates with confidence >= 0.80 can be auto-accepted
+    min_review_confidence: float = 0.40       # candidates with 0.40 <= confidence < 0.80 routed to REVIEW
+    manual_review_sensors: list[str] = Field(default_factory=list)  # specific sensors requiring mandatory human review
+
 
     # Configured Asset/Sensor constraints (Boiler & Pump as required)
     sensor_constraints: Dict[str, SensorConstraint] = Field(default_factory=lambda: {

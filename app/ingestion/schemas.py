@@ -66,9 +66,11 @@ class OverviewResponse(BaseModel):
     total_readings_received: int
     readings_preserved: int
     repairs_accepted: int
+    readings_under_review: int
     unresolved_events: int
     issues_detected: int
     fault_distribution: dict[str, int]
+
 
 
 class HealthResponse(BaseModel):
